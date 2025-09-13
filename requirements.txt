@@ -1,0 +1,6 @@
+streamlit
+ultralytics==8.2.103
+opencv-python-headless
+numpy
+torch
+torchvision
