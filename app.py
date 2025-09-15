@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from ultralytics import YOLO
+from collections import defaultdict
 
 # -----------------------
 # UI / Paths
@@ -250,6 +251,7 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
 
     frame_history = []
     pass_history = []
+    player_positions = defaultdict(list)
 
     while True:
         ret, frame = cap.read()
@@ -295,13 +297,16 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
                 if pred is not None:
                     ball_center = pred
 
-        # Draw players
+        # Draw players and record positions
         for tid, bbox, centroid in tracks:
             x1,y1,x2,y2 = bbox
             cx,cy = centroid
             cv2.rectangle(frame, (x1,y1),(x2,y2),(200,100,0),2)
             cv2.putText(frame, f"P{tid}", (x1, y1-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,100,0), 2)
             cv2.circle(frame, (cx,cy), 3, (200,100,0), -1)
+            # record centroid for heatmap
+            if 0 <= cx < W and 0 <= cy < H:
+                player_positions[tid].append((cx, cy))
 
         # Draw ball
         if ball_center is not None:
@@ -376,7 +381,27 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
 
     elapsed = time.time() - start_time
 
-    return pass_counter, elapsed
+    return pass_counter, elapsed, dict(player_positions), W, H
+
+
+def save_player_heatmap(points, frame_width, frame_height, output_path, bins=60):
+    if not points:
+        return None
+    xs = [p[0] for p in points]
+    ys = [p[1] for p in points]
+    heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=bins, range=[[0, frame_width], [0, frame_height]])
+    heatmap = heatmap.T
+
+    plt.figure(figsize=(8, 5))
+    plt.imshow(heatmap, origin='lower', cmap='hot', interpolation='nearest', extent=[0, frame_width, 0, frame_height], aspect='auto')
+    plt.colorbar(label='Presence density')
+    plt.title('Player Position Heatmap')
+    plt.xlabel('X (pixels)')
+    plt.ylabel('Y (pixels)')
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close()
+    return output_path
 
 
 # -----------------------
@@ -406,12 +431,18 @@ if uploaded_file is not None:
 
             # Run processing (blocking) — the HTML animation keeps running client-side
             with st.spinner("Processing video with YOLO model — this may take a while..."):
-                passes, elapsed = process_video(input_path, output_video_path, chart_path, MODEL_PATH_INPUT)
+                passes, elapsed, player_positions, frame_w, frame_h = process_video(input_path, output_video_path, chart_path, MODEL_PATH_INPUT)
 
             # remove animation
             placeholder.empty()
 
             st.success(f"Processing finished in {elapsed:.1f}s — total passes: {passes}")
+
+            # cache results for interaction
+            st.session_state["player_positions"] = player_positions
+            st.session_state["frame_w"] = frame_w
+            st.session_state["frame_h"] = frame_h
+            st.session_state["workdir"] = tdir
 
             # Show annotated video
             st.subheader("Annotated video")
@@ -437,6 +468,26 @@ if uploaded_file is not None:
             # a parameter to save frame_history inside process_video and return it.
 
             st.info("If you want a CSV of frame vs pass counts, rerun with CSV output enabled (I can add this flag).")
+
+            # Heatmap UI
+            st.subheader("Player Heatmap")
+            positions = st.session_state.get("player_positions", {})
+            if positions:
+                player_ids = sorted([int(pid) for pid in positions.keys()])
+                default_idx = 0 if player_ids else None
+                selected_pid = st.selectbox("Select player ID", player_ids, index=default_idx, format_func=lambda x: f"P{x}")
+                if selected_pid is not None:
+                    heatmap_dir = st.session_state.get("workdir", tdir)
+                    heatmap_path = os.path.join(heatmap_dir, f"heatmap_P{selected_pid}.png")
+                    save_player_heatmap(positions.get(selected_pid, []), st.session_state.get("frame_w", 0), st.session_state.get("frame_h", 0), heatmap_path)
+                    if os.path.exists(heatmap_path):
+                        st.image(heatmap_path, caption=f"Heatmap for P{selected_pid}", use_column_width=True)
+                        with open(heatmap_path, "rb") as f:
+                            st.download_button(label=f"Download heatmap P{selected_pid}", data=f, file_name=f"heatmap_P{selected_pid}.png", mime="image/png")
+                    else:
+                        st.info("No positions recorded for this player.")
+            else:
+                st.info("No player positions recorded.")
 
 else:
     st.info("Upload a video above, then set your model path and press Start processing.")
