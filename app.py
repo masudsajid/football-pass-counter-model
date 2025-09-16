@@ -1,3 +1,4 @@
+# streamlit_app.py
 import streamlit as st
 import tempfile
 import os
@@ -14,13 +15,12 @@ from collections import defaultdict
 # UI / Paths
 # -----------------------
 st.set_page_config(page_title="Football Pass Counter", layout="wide")
-st.title("⚽ Football Pass Counter — Streamlit UI")
+st.title("⚽ Football Pass Counter — Streamlit UI (Updated)")
 
-MODEL_PATH_INPUT = st.text_input("best.pt", value="best.pt")
+MODEL_PATH_INPUT = st.text_input("Model path (best.pt)", value="best.pt")
+uploaded_file = st.file_uploader("Upload a football video (mp4, avi, mov)", type=["mp4", "avi", "mov"])
 
-uploaded_file = st.file_uploader("Upload a football video (mp4, avi)", type=["mp4", "avi", "mov"]) 
-
-# 3D animation HTML (three.js rotating cube)
+# small 3D animation while processing (client-side)
 THREE_JS_HTML = '''
 <!doctype html>
 <html>
@@ -29,7 +29,7 @@ THREE_JS_HTML = '''
   <style>html,body{margin:0;height:100%;overflow:hidden;background:#0b1020}#info{position:absolute;top:8px;left:8px;color:#fff;font-family:Arial}</style>
 </head>
 <body>
-<div id="info">Processing... sit tight — counting passes</div>
+<div id="info">Processing... please wait</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r148/three.min.js"></script>
 <script>
   const scene = new THREE.Scene();
@@ -44,7 +44,6 @@ THREE_JS_HTML = '''
   scene.add(cube);
 
   camera.position.z = 3;
-
   function animate() {
     requestAnimationFrame(animate);
     cube.rotation.x += 0.01;
@@ -52,30 +51,27 @@ THREE_JS_HTML = '''
     renderer.render(scene, camera);
   }
   animate();
-
-  window.addEventListener('resize', ()=>{
-    camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight);
-  });
+  window.addEventListener('resize', ()=>{ camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 </script>
 </body>
 </html>
 '''
 
-# -----------------------
-# Core processing code (adapted from your script)
-# -----------------------
-
-# Params (kept same as your script)
+# ----------------------
+# Parameters (you can tune)
+# ----------------------
 YOLO_CONF = 0.02
 PLAYER_CONF_THR = 0.30
 BALL_CONF_THR = 0.10
-MAX_PLAYER_MATCH_DIST = 90
-PLAYER_MISSING_TOLERANCE = 30
-MIN_HOLD_FRAMES = 2
-BALL_SEARCH_RADIUS = 120
-SMOOTH_ALPHA = 0.6
+MAX_PLAYER_MATCH_DIST = 90         # px: distance threshold for matching detections to existing tracks
+PLAYER_MISSING_TOLERANCE = 30      # frames tolerated missing before deleting track
+MIN_HOLD_FRAMES = 2                # frames threshold before confirming possessor change
+BALL_SEARCH_RADIUS = 120           # fallback detection area radius
+SMOOTH_ALPHA = 0.6                 # ball smoothing alpha
 
-
+# -----------------------
+# Utility: fallback ball detection by color / circularity
+# -----------------------
 def fallback_detect_ball(frame, last_center=None, search_radius=BALL_SEARCH_RADIUS):
     h, w = frame.shape[:2]
     if last_center is not None:
@@ -93,7 +89,7 @@ def fallback_detect_ball(frame, last_center=None, search_radius=BALL_SEARCH_RADI
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     lower_white = np.array([0, 0, 180])
-    upper_white = np.array([180, 50, 255])
+    upper_white = np.array([180, 60, 255])
     mask = cv2.inRange(hsv, lower_white, upper_white)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -105,7 +101,7 @@ def fallback_detect_ball(frame, last_center=None, search_radius=BALL_SEARCH_RADI
         perimeter = cv2.arcLength(c, True)
         if perimeter == 0:
             continue
-        circularity = 4 * math.pi * (area / (perimeter * perimeter))
+        circularity = 4 * math.pi * (area / (perimeter * perimeter + 1e-9))
         M = cv2.moments(c)
         if M["m00"] == 0:
             continue
@@ -125,27 +121,40 @@ def fallback_detect_ball(frame, last_center=None, search_radius=BALL_SEARCH_RADI
         return (candidates[0][0], candidates[0][1])
 
 
+# -----------------------
+# Player Tracker: spatial matching and missing handling
+# -----------------------
 class PlayerTracker:
-    def __init__(self, max_missing=PLAYER_MISSING_TOLERANCE, max_dist=MAX_PLAYER_MATCH_DIST):
-        self.tracks = {}
+    def __init__(self, max_missing=PLAYER_MISSING_TOLERANCE, max_dist=MAX_PLAYER_MATCH_DIST, max_players=22):
+        self.tracks = {}           # tid -> {'bbox':(x1,y1,x2,y2),'centroid':(cx,cy),'missing':int}
         self.next_id = 1
         self.max_missing = max_missing
         self.max_dist = max_dist
+        self.max_players = max_players
 
     def update(self, detections):
+        """
+        detections: list of bbox tuples (x1,y1,x2,y2)
+        returns: list of (tid, bbox, centroid)
+        """
         assigned = {}
         new_centroids = [((x1+x2)//2, (y1+y2)//2) for (x1,y1,x2,y2) in detections]
         new_bboxes = detections.copy()
 
         track_ids = list(self.tracks.keys())
         if track_ids and new_centroids:
+            # build distance matrix track x detections
             dists = []
             for tid in track_ids:
                 tx, ty = self.tracks[tid]['centroid']
                 row = [math.hypot(tx-nx, ty-ny) for (nx,ny) in new_centroids]
                 dists.append(row)
             dists = np.array(dists)
+
+            # greedy assignment (smallest distance first)
             while True:
+                if dists.size == 0:
+                    break
                 i, j = np.unravel_index(np.argmin(dists, axis=None), dists.shape)
                 minval = dists[i, j]
                 if minval > self.max_dist:
@@ -162,6 +171,7 @@ class PlayerTracker:
 
         updated_ids = set()
         used_detections = set()
+        # update assigned tracks
         for tid, j in assigned.items():
             bbox = new_bboxes[j]
             cx, cy = new_centroids[j]
@@ -171,19 +181,25 @@ class PlayerTracker:
             updated_ids.add(tid)
             used_detections.add(j)
 
+        # increment missing for un-updated tracks
         for tid in list(self.tracks.keys()):
             if tid not in updated_ids:
                 self.tracks[tid]['missing'] += 1
                 if self.tracks[tid]['missing'] > self.max_missing:
                     del self.tracks[tid]
 
+        # add new tracks for unmatched detections (only if under max_players)
         for j, bbox in enumerate(new_bboxes):
             if j in used_detections:
                 continue
-            cx, cy = new_centroids[j]
-            tid = self.next_id
-            self.next_id += 1
-            self.tracks[tid] = {'bbox': bbox, 'centroid': (cx, cy), 'missing': 0}
+            if self.next_id <= self.max_players:
+                cx, cy = new_centroids[j]
+                tid = self.next_id
+                self.next_id += 1
+                self.tracks[tid] = {'bbox': bbox, 'centroid': (cx, cy), 'missing': 0}
+            else:
+                # skip creating new tracks beyond max_players
+                pass
 
         out = []
         for tid, info in self.tracks.items():
@@ -191,6 +207,9 @@ class PlayerTracker:
         return out
 
 
+# -----------------------
+# Ball tracker (smoothed) used for fallback/prediction
+# -----------------------
 class BallTracker:
     def __init__(self, alpha=SMOOTH_ALPHA):
         self.cx = None
@@ -226,8 +245,9 @@ class BallTracker:
         return (px, py)
 
 
-# The heavy-lifting processing function
-
+# -----------------------
+# Heavy-lifting processing function (adapted from your Colab logic)
+# -----------------------
 def process_video(input_path: str, output_video_path: str, chart_path: str, model_path: str):
     model = YOLO(model_path)
 
@@ -251,7 +271,7 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
 
     frame_history = []
     pass_history = []
-    player_positions = defaultdict(list)
+    player_positions = defaultdict(list)   # tid -> list of centroids (pixel coords)
 
     while True:
         ret, frame = cap.read()
@@ -259,27 +279,31 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
             break
         frame_idx += 1
 
+        # YOLO detection
         results = model(frame, conf=YOLO_CONF, imgsz=640)[0]
 
         player_detections = []
         ball_candidates = []
 
         for box in results.boxes:
-            cls_id = int(box.cls)
-            label = model.names[cls_id]
-            conf = float(box.conf)
-            xy = box.xyxy[0].tolist()
+            cls_id = int(box.cls.cpu().numpy()) if hasattr(box.cls, "cpu") else int(box.cls)
+            label = model.names[cls_id] if cls_id in model.names else str(cls_id)
+            conf = float(box.conf.cpu().numpy()) if hasattr(box.conf, "cpu") else float(box.conf)
+            xy = box.xyxy[0].cpu().numpy() if hasattr(box.xyxy, "cpu") else box.xyxy[0].numpy()
             x1, y1, x2, y2 = [int(v) for v in xy]
-            if label == "player" and conf >= PLAYER_CONF_THR:
+            if label.lower() in ("player", "person") and conf >= PLAYER_CONF_THR:
                 player_detections.append((x1, y1, x2, y2))
-            elif label == "ball" and conf >= BALL_CONF_THR:
+            elif label.lower() in ("ball", "sports ball", "soccerball") and conf >= BALL_CONF_THR:
                 bx = (x1+x2)//2; by = (y1+y2)//2
                 ball_candidates.append((bx, by, conf, (x1,y1,x2,y2)))
 
+        # update player tracker (ensures spatial matching / re-id)
         tracks = player_tracker.update(player_detections)
 
+        # ball handling: prefer detector, else fallback to prediction or color-based search
         ball_center = None
         if ball_candidates:
+            # choose highest confidence candidate
             ball_candidates.sort(key=lambda x: -x[2])
             bc = ball_candidates[0]
             ball_center = (bc[0], bc[1])
@@ -297,14 +321,15 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
                 if pred is not None:
                     ball_center = pred
 
-        # Draw players and record positions
+        # Draw players and store positions
         for tid, bbox, centroid in tracks:
             x1,y1,x2,y2 = bbox
             cx,cy = centroid
+            # draw bbox + label
             cv2.rectangle(frame, (x1,y1),(x2,y2),(200,100,0),2)
             cv2.putText(frame, f"P{tid}", (x1, y1-8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200,100,0), 2)
             cv2.circle(frame, (cx,cy), 3, (200,100,0), -1)
-            # record centroid for heatmap
+            # record centroid for heatmap (pixel coords)
             if 0 <= cx < W and 0 <= cy < H:
                 player_positions[tid].append((cx, cy))
 
@@ -314,7 +339,7 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
             cv2.circle(frame, (bx,by), 6, (0,255,0), -1)
             cv2.putText(frame, "Ball", (bx+8, by), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
 
-        # Pass counting logic
+        # Pass counting logic using bounding-box containment + hold frames
         new_possessor = None
         if ball_center is not None:
             bx, by = int(ball_center[0]), int(ball_center[1])
@@ -325,6 +350,7 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
                     new_possessor = tid
                     break
 
+        # candidate / hold logic (reduces noise)
         if new_possessor is None:
             candidate_possessor = None
             candidate_hold = 0
@@ -356,52 +382,74 @@ def process_video(input_path: str, output_video_path: str, chart_path: str, mode
                         candidate_possessor = None
                         candidate_hold = 0
 
+        # overlay possessor and pass counter
         if current_possessor is not None:
             cv2.putText(frame, f"Possessor: P{current_possessor}", (30, H-40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0,200,200), 2)
         cv2.putText(frame, f"Passes: {pass_counter}", (30, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0,200,200), 3)
 
         out.write(frame)
 
+        # bookkeeping for chart
         frame_history.append(frame_idx)
         pass_history.append(pass_counter)
 
     cap.release()
     out.release()
 
-    # Save chart
+    # Save step / cumulative chart (where='post' for staircase)
+    cumulative = np.array(pass_history)
     plt.figure(figsize=(10,5))
-    plt.plot(frame_history, pass_history, label="Passes")
+    plt.step(frame_history, cumulative, where='post', linewidth=2)
     plt.xlabel("Frame")
     plt.ylabel("Pass Counter")
-    plt.title("Passes per Frame")
-    plt.legend()
+    plt.title("Cumulative Passes per Frame")
     plt.grid(True)
-    plt.savefig(chart_path)
+    plt.tight_layout()
+    plt.savefig(chart_path, dpi=150)
     plt.close()
 
     elapsed = time.time() - start_time
+    return pass_counter, elapsed, dict(player_positions), W, H, output_video_path, chart_path
 
-    return pass_counter, elapsed, dict(player_positions), W, H
 
-
+# -----------------------
+# Heatmap saver + distance (pixel -> pitch meters)
+# -----------------------
 def save_player_heatmap(points, frame_width, frame_height, output_path, bins=60):
+    """
+    points: list of (cx,cy) in pixel coordinates (0..W-1, 0..H-1)
+    Saves heatmap image and overlays distance covered in meters (approx)
+    """
     if not points:
         return None
+
+    # compute distance covered in pitch meters (length=120m, width=80m)
+    dist_m = 0.0
+    for i in range(1, len(points)):
+        dx_px = points[i][0] - points[i-1][0]
+        dy_px = points[i][1] - points[i-1][1]
+        dx_m = (dx_px / frame_width) * 120
+        dy_m = (dy_px / frame_height) * 80
+        dist_m += math.hypot(dx_m, dy_m)
+
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
+
+    # 2D histogram (heatmap)
     heatmap, xedges, yedges = np.histogram2d(xs, ys, bins=bins, range=[[0, frame_width], [0, frame_height]])
-    heatmap = heatmap.T
+    heatmap = heatmap.T  # transpose for correct orientation
 
     plt.figure(figsize=(8, 5))
-    plt.imshow(heatmap, origin='lower', cmap='hot', interpolation='nearest', extent=[0, frame_width, 0, frame_height], aspect='auto')
+    plt.imshow(heatmap, origin='lower', cmap='magma', interpolation='nearest',
+               extent=[0, frame_width, 0, frame_height], aspect='auto')
     plt.colorbar(label='Presence density')
-    plt.title('Player Position Heatmap')
+    plt.title(f'Heatmap (Distance covered: {dist_m:.2f} m)')
     plt.xlabel('X (pixels)')
     plt.ylabel('Y (pixels)')
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close()
-    return output_path
+    return output_path, dist_m
 
 
 # -----------------------
@@ -412,7 +460,6 @@ if uploaded_file is not None:
     input_path = os.path.join(tdir, uploaded_file.name)
     with open(input_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-
     st.success(f"Saved uploaded video to: {input_path}")
 
     output_video_path = os.path.join(tdir, "annotated_output.mp4")
@@ -425,64 +472,57 @@ if uploaded_file is not None:
             st.error(f"Model path not found: {MODEL_PATH_INPUT}")
         else:
             placeholder = st.empty()
-            # show 3D animation while processing (client-side)
             with placeholder.container():
-                st.components.v1.html(THREE_JS_HTML, height=400)
+                st.components.v1.html(THREE_JS_HTML, height=300)
 
-            # Run processing (blocking) — the HTML animation keeps running client-side
             with st.spinner("Processing video with YOLO model — this may take a while..."):
-                passes, elapsed, player_positions, frame_w, frame_h = process_video(input_path, output_video_path, chart_path, MODEL_PATH_INPUT)
+                passes, elapsed, player_positions, frame_w, frame_h, out_vid, out_chart = process_video(
+                    input_path, output_video_path, chart_path, MODEL_PATH_INPUT
+                )
 
-            # remove animation
             placeholder.empty()
 
             st.success(f"Processing finished in {elapsed:.1f}s — total passes: {passes}")
 
-            # cache results for interaction
+            # cache results
             st.session_state["player_positions"] = player_positions
             st.session_state["frame_w"] = frame_w
             st.session_state["frame_h"] = frame_h
             st.session_state["workdir"] = tdir
+            st.session_state["output_video"] = out_vid
+            st.session_state["chart_path"] = out_chart
+            st.session_state["passes"] = passes
 
             # Show annotated video
             st.subheader("Annotated video")
-            st.video(output_video_path)
+            st.video(out_vid)
 
             # Show chart
-            st.subheader("Passes per Frame")
-            st.image(chart_path, use_column_width=True)
+            st.subheader("Passes per Frame (cumulative)")
+            st.image(out_chart, use_column_width=True)
 
             # Downloads
-            with open(output_video_path, "rb") as f:
-                btn = st.download_button(label="Download annotated video", data=f, file_name="annotated_output.mp4", mime="video/mp4")
-            with open(chart_path, "rb") as f:
+            with open(out_vid, "rb") as f:
+                st.download_button(label="Download annotated video", data=f, file_name="annotated_output.mp4", mime="video/mp4")
+            with open(out_chart, "rb") as f:
                 st.download_button(label="Download pass chart", data=f, file_name="pass_chart.png", mime="image/png")
-
-            # Also show a small CSV table (frame,passes)
-            import csv
-            csv_path = os.path.join(tdir, "passes.csv")
-            # regenerate simple csv from chart data by re-running a lighter pass over the video is expensive, so
-            # instead we create a CSV with cumulative pass counts per frame based on the chart we saved earlier.
-            # For clarity we will reconstruct from the saved chart image is not helpful; instead, run a tiny second pass
-            # is inefficient. To keep this example simple, we will not produce the CSV here. If you want CSV, enable
-            # a parameter to save frame_history inside process_video and return it.
-
-            st.info("If you want a CSV of frame vs pass counts, rerun with CSV output enabled (I can add this flag).")
 
             # Heatmap UI
             st.subheader("Player Heatmap")
             positions = st.session_state.get("player_positions", {})
             if positions:
-                player_ids = sorted([int(pid) for pid in positions.keys()])
-                default_idx = 0 if player_ids else None
+                # track ids are integers; provide sorted list
+                player_ids = sorted(positions.keys())
+                default_idx = 0
                 selected_pid = st.selectbox("Select player ID", player_ids, index=default_idx, format_func=lambda x: f"P{x}")
                 if selected_pid is not None:
                     heatmap_dir = st.session_state.get("workdir", tdir)
                     heatmap_path = os.path.join(heatmap_dir, f"heatmap_P{selected_pid}.png")
-                    save_player_heatmap(positions.get(selected_pid, []), st.session_state.get("frame_w", 0), st.session_state.get("frame_h", 0), heatmap_path)
-                    if os.path.exists(heatmap_path):
-                        st.image(heatmap_path, caption=f"Heatmap for P{selected_pid}", use_column_width=True)
-                        with open(heatmap_path, "rb") as f:
+                    out = save_player_heatmap(positions.get(selected_pid, []), st.session_state.get("frame_w", 0), st.session_state.get("frame_h", 0), heatmap_path)
+                    if out is not None:
+                        heatmap_path_saved, dist_val = out
+                        st.image(heatmap_path_saved, caption=f"Heatmap for P{selected_pid} — Distance: {dist_val:.2f} m", use_column_width=True)
+                        with open(heatmap_path_saved, "rb") as f:
                             st.download_button(label=f"Download heatmap P{selected_pid}", data=f, file_name=f"heatmap_P{selected_pid}.png", mime="image/png")
                     else:
                         st.info("No positions recorded for this player.")
@@ -492,7 +532,6 @@ if uploaded_file is not None:
 else:
     st.info("Upload a video above, then set your model path and press Start processing.")
 
-
 # Footer
 st.markdown("---")
-st.caption("App built with ultralytics YOLO, OpenCV and Streamlit. Make sure requirements are installed in your venv before running: pip install -r requirements.txt")
+st.caption("App built with ultralytics YOLO, OpenCV and Streamlit. Ensure required packages are installed (ultralytics, opencv-python, matplotlib, seaborn, mplsoccer).")
