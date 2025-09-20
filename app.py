@@ -1,8 +1,50 @@
-# streamlit_app.py
+# app.py (Legacy - Use main.py for new modular structure)
+"""
+DEPRECATED: This file contains the original monolithic implementation.
+For the new modular structure, use main.py instead.
+
+This file is kept for reference and backward compatibility.
+To run the modular version: python main.py
+To run this legacy version: streamlit run app.py
+"""
+
 import streamlit as st
+from pathlib import Path
+
+# Check if user wants to use the new modular structure
+st.warning("⚠️ **This is the legacy monolithic version.**")
+st.info("🔄 **For the new modular structure with better organization, run:** `python main.py` or `streamlit run main.py`")
+
+if st.button("🚀 Switch to New Modular Version"):
+    st.markdown("""
+    ### To use the new modular structure:
+    
+    1. **Run the new version:**
+       ```bash
+       streamlit run main.py
+       ```
+       
+    2. **Or use Python directly:**
+       ```bash
+       python main.py
+       ```
+    
+    ### New Structure Benefits:
+    - **Better organization** with separate modules
+    - **Easier maintenance** and testing
+    - **Improved performance** with optimized components  
+    - **Enhanced UI** with better styling and features
+    - **More robust** error handling and validation
+    """)
+    st.stop()
+
+# If user chooses to continue with legacy version
+st.markdown("---")
+st.title("⚽ Football Pass Counter — Legacy Version")
+
+# Original implementation continues below...
 import tempfile
 import os
-from pathlib import Path
 import time
 import math
 import cv2
@@ -14,9 +56,6 @@ from collections import defaultdict
 # -----------------------
 # UI / Paths
 # -----------------------
-st.set_page_config(page_title="Football Pass Counter", layout="wide")
-st.title("⚽ Football Pass Counter — Streamlit UI (Updated)")
-
 MODEL_PATH_INPUT = st.text_input("Model path (best.pt)", value="best.pt")
 uploaded_file = st.file_uploader("Upload a football video (mp4, avi, mov)", type=["mp4", "avi", "mov"])
 

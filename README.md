@@ -1,205 +1,203 @@
-# ⚽ Football Pass Counter
+# ⚽ Football Pass Counter - Modular Architecture
 
-A computer vision application that automatically counts football passes in videos using YOLO object detection and tracking algorithms. Built with Streamlit for an easy-to-use web interface.
+A modular, scalable football pass counting application using YOLO object detection, multi-object tracking, and advanced computer vision techniques.
 
-## Features
+## 🏗️ Architecture Overview
 
-- **Automatic Pass Counting**: Detects and tracks players and the ball to count passes
-- **Real-time Visualization**: Shows annotated video with player tracking and ball detection
-- **Interactive Web Interface**: Easy-to-use Streamlit web app
-- **Export Results**: Download annotated videos and pass count charts
-- **Player Tracking**: Maintains consistent player IDs throughout the video
-- **Ball Detection**: Uses both YOLO detection and fallback computer vision methods
+This project has been refactored into a clean, modular architecture following Django-style best practices:
 
-## Requirements
-
-- **Python**: 3.8 - 3.11 (3.12 not supported due to PyTorch compatibility)
-- **Operating System**: Windows, macOS, or Linux
-- **Memory**: At least 4GB RAM recommended
-- **GPU**: Optional but recommended for faster processing
-
-## Installation
-
-### 1. Clone or Download the Project
-
-```bash
-git clone <repository-url>
-cd football_pass_counter
+```
+football-pass-counter-model/
+├── config/                 # Configuration and settings
+│   ├── __init__.py
+│   └── settings.py        # All constants and parameters
+├── detection/              # Object detection modules
+│   ├── __init__.py
+│   ├── ball_detection.py  # Fallback ball detection using CV
+│   └── yolo_processor.py  # YOLO model wrapper
+├── trackers/              # Object tracking modules
+│   ├── __init__.py
+│   ├── player_tracker.py  # Multi-player tracking
+│   └── ball_tracker.py    # Ball tracking with smoothing
+├── services/              # Business logic services
+│   ├── __init__.py
+│   ├── pass_detector.py   # Pass detection logic
+│   └── video_processor.py # Main video processing service
+├── visualization/         # Visualization and charts
+│   ├── __init__.py
+│   ├── heatmap_generator.py  # Player heatmaps
+│   ├── chart_generator.py    # Statistical charts
+│   └── video_annotator.py    # Video frame annotations
+├── ui/                    # User interface components
+│   ├── __init__.py
+│   ├── streamlit_app.py   # Main Streamlit application
+│   └── components.py      # Reusable UI components
+├── main.py               # New modular entry point
+├── app.py               # Legacy monolithic version
+└── requirements.txt     # Dependencies
 ```
 
-Or download and extract the project files to a folder.
+## 🚀 Quick Start
 
-### 2. Create a Virtual Environment
-
-**Windows:**
+### New Modular Version (Recommended)
 ```bash
-python -m venv venv
-venv\Scripts\activate
+# Run the new modular application
+streamlit run main.py
+# or
+python main.py
 ```
 
-**macOS/Linux:**
+### Legacy Version (Backward Compatibility)
 ```bash
-python3 -m venv venv
-source venv/bin/activate
-```
-
-### 3. Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-This will install:
-- Streamlit (web interface)
-- Ultralytics YOLO (object detection)
-- OpenCV (computer vision)
-- PyTorch (deep learning framework)
-- NumPy (numerical computing)
-- Matplotlib (plotting)
-
-### 4. Download the YOLO Model
-
-Make sure you have the `best.pt` model file in the project directory. This should be a trained YOLO model that can detect:
-- **Players** (class: "player")
-- **Ball** (class: "ball")
-
-If you don't have a model file, you'll need to train one or obtain a pre-trained model for football detection.
-
-## Usage
-
-### 1. Start the Application
-
-```bash
+# Run the original monolithic version
 streamlit run app.py
 ```
 
-The application will start and automatically open in your web browser at `http://localhost:8501`.
+## 🔧 Features
 
-### 2. Upload a Video
+### Detection & Tracking
+- **YOLO-based Detection**: Advanced object detection for players and ball
+- **Multi-Object Tracking**: Spatial matching with re-identification
+- **Fallback Detection**: Computer vision-based ball detection when YOLO fails
+- **Temporal Smoothing**: Ball position smoothing and velocity prediction
 
-1. Click "Browse files" to upload a football video
-2. Supported formats: MP4, AVI, MOV
-3. The video will be saved temporarily for processing
+### Analysis & Visualization
+- **Pass Counting**: Automatic pass detection with validation
+- **Player Heatmaps**: Movement density visualization with distance calculation
+- **Statistical Charts**: Pass progression, intervals, and activity timelines
+- **Real-time Annotation**: Live video annotation with bounding boxes and labels
 
-### 3. Configure Model Path
+### User Interface
+- **Modern Web UI**: Clean, responsive Streamlit interface
+- **Progress Tracking**: Real-time processing indicators with 3D animations
+- **Download Support**: Export videos, charts, and heatmaps
+- **Session Management**: Persistent state across interactions
 
-- By default, the model path is set to `best.pt`
-- If your model file has a different name, update the path in the text input field
+## 📦 Installation
 
-### 4. Process the Video
+```bash
+# Clone the repository
+git clone <repository-url>
+cd football-pass-counter-model
 
-1. Click "Start processing" to begin analysis
-2. A 3D animation will show while processing (this may take several minutes)
-3. The application will:
-   - Detect players and track them across frames
-   - Detect and track the ball
-   - Count passes between players
-   - Generate an annotated video
-   - Create a pass count chart
+# Install dependencies
+pip install -r requirements.txt
 
-### 5. View Results
+# Ensure you have your YOLO model file (best.pt)
+# Place it in the project root or specify the path in the UI
+```
 
-After processing completes, you'll see:
-- **Total pass count** in the success message
-- **Annotated video** with player tracking and ball detection
-- **Pass count chart** showing passes over time
-- **Download buttons** for the annotated video and chart
+## 🛠️ Configuration
 
-## How It Works
-
-### Player Detection & Tracking
-- Uses YOLO to detect players in each frame
-- Implements a tracking algorithm to maintain consistent player IDs
-- Handles players temporarily leaving the frame
-
-### Ball Detection
-- Primary: YOLO detection for ball recognition
-- Fallback: Computer vision techniques using color detection and shape analysis
-- Predicts ball position when detection fails
-
-### Pass Counting Logic
-- Tracks which player has possession of the ball
-- Counts a pass when possession changes between different players
-- Requires minimum hold time to avoid false positives
-
-## Configuration Parameters
-
-The application uses several configurable parameters:
+Edit `config/settings.py` to customize detection and tracking parameters:
 
 ```python
-YOLO_CONF = 0.02              # YOLO confidence threshold
-PLAYER_CONF_THR = 0.30        # Player detection confidence
-BALL_CONF_THR = 0.10          # Ball detection confidence
-MAX_PLAYER_MATCH_DIST = 90    # Max distance for player tracking
-PLAYER_MISSING_TOLERANCE = 30 # Frames before removing lost player
-MIN_HOLD_FRAMES = 2           # Minimum frames to confirm possession
-BALL_SEARCH_RADIUS = 120      # Search radius for fallback ball detection
-SMOOTH_ALPHA = 0.6            # Ball position smoothing factor
+# YOLO Detection Parameters
+YOLO_CONF = 0.02
+PLAYER_CONF_THR = 0.30
+BALL_CONF_THR = 0.10
+
+# Tracking Parameters
+MAX_PLAYER_MATCH_DIST = 90
+PLAYER_MISSING_TOLERANCE = 30
+MIN_HOLD_FRAMES = 2
+
+# Visualization Parameters
+HEATMAP_BINS = 60
+CHART_DPI = 150
 ```
 
-## Troubleshooting
+## 📊 Usage
+
+1. **Upload Video**: Select a football video file (MP4, AVI, MOV)
+2. **Set Model Path**: Specify path to your YOLO model file
+3. **Start Processing**: Click process and wait for analysis
+4. **View Results**: Explore annotated video, pass charts, and player heatmaps
+5. **Download**: Export results for further analysis
+
+## 🏛️ Module Details
+
+### Configuration (`config/`)
+- Centralized settings and constants
+- Easy parameter tuning
+- Environment-specific configurations
+
+### Detection (`detection/`)
+- **YOLOProcessor**: Model loading, inference, and result processing
+- **ball_detection**: Fallback detection using HSV color filtering and contour analysis
+
+### Trackers (`trackers/`)
+- **PlayerTracker**: Spatial matching with greedy assignment algorithm
+- **BallTracker**: Temporal smoothing with velocity-based prediction
+
+### Services (`services/`)
+- **VideoProcessor**: Main orchestration service
+- **PassDetector**: Ball possession analysis and pass counting logic
+
+### Visualization (`visualization/`)
+- **HeatmapGenerator**: 2D density maps with distance calculation
+- **ChartGenerator**: Statistical visualizations and summaries
+- **VideoAnnotator**: Frame annotation utilities
+
+### UI (`ui/`)
+- **StreamlitApp**: Main application interface
+- **UIComponents**: Reusable UI elements and styling
+
+## 🔄 Migration from Legacy
+
+The legacy monolithic version (`app.py`) is preserved for backward compatibility. The new modular structure offers:
+
+- **Better Organization**: Clear separation of concerns
+- **Easier Maintenance**: Modular components for testing and updates
+- **Enhanced Performance**: Optimized processing pipeline
+- **Improved UI**: Better styling and user experience
+- **Robust Error Handling**: Comprehensive validation and error management
+
+## 🧪 Development
+
+### Adding New Features
+1. Create new modules in appropriate directories
+2. Update `__init__.py` files for imports
+3. Add configuration parameters to `config/settings.py`
+4. Update UI components as needed
+
+### Testing
+```bash
+# Test individual modules
+python -m pytest tests/
+
+# Run specific component tests
+python -c "from detection import YOLOProcessor; print('Detection module OK')"
+```
+
+## 📈 Performance Considerations
+
+- **Memory Usage**: Large videos may require significant RAM
+- **Processing Time**: Depends on video length and resolution
+- **Model Size**: YOLO model affects loading time and inference speed
+- **Disk Space**: Temporary files created during processing
+
+## 🤝 Contributing
+
+1. Follow the modular architecture patterns
+2. Add appropriate documentation and type hints
+3. Update configuration files for new parameters
+4. Test both legacy and modular versions
+5. Maintain backward compatibility
+
+## 📄 License
+
+This project follows the same license as the original implementation.
+
+## 🆘 Troubleshooting
 
 ### Common Issues
+- **Model Not Found**: Ensure YOLO model path is correct
+- **Processing Fails**: Check video format and file integrity
+- **Memory Errors**: Reduce video resolution or process shorter clips
+- **Import Errors**: Verify all dependencies are installed
 
-**"Model path not found" error:**
-- Ensure `best.pt` exists in the project directory
-- Check the model path input field
-
-**Slow processing:**
-- Use a GPU-enabled PyTorch installation
-- Reduce video resolution or length
-- Close other applications to free up memory
-
-**Poor detection accuracy:**
-- Ensure your YOLO model is trained on similar football footage
-- Adjust confidence thresholds in the code
-- Use higher quality input videos
-
-**Memory errors:**
-- Process shorter video segments
-- Reduce video resolution
-- Increase system RAM
-
-### Performance Tips
-
-1. **Use GPU**: Install CUDA-enabled PyTorch for faster processing
-2. **Video Quality**: Higher resolution videos provide better detection
-3. **Lighting**: Well-lit videos with clear player/ball contrast work best
-4. **Camera Angle**: Overhead or sideline views typically work better than end-zone views
-
-## File Structure
-
-```
-football_pass_counter/
-├── app.py              # Main Streamlit application
-├── best.pt             # YOLO model file (you need to provide this)
-├── requirements.txt    # Python dependencies
-├── README.md          # This file
-└── venv/              # Virtual environment (created during setup)
-```
-
-## Dependencies
-
-- **streamlit**: Web application framework
-- **ultralytics**: YOLO object detection
-- **opencv-python-headless**: Computer vision operations
-- **torch**: Deep learning framework
-- **torchvision**: Computer vision utilities
-- **numpy**: Numerical computing
-- **matplotlib**: Plotting and visualization
-
-## Contributing
-
-Feel free to submit issues, feature requests, or pull requests to improve the application.
-
-## License
-
-This project is open source. Please check the license file for details.
-
-## Support
-
-If you encounter any issues:
-1. Check the troubleshooting section above
-2. Ensure all dependencies are correctly installed
-3. Verify your YOLO model is compatible
-4. Check that your Python version is supported (3.8-3.11)
+### Getting Help
+- Check the legacy version (`app.py`) for reference implementation
+- Review configuration settings in `config/settings.py`
+- Examine error logs in the Streamlit interface

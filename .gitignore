@@ -1,3 +1,14 @@
 venv/
 __pycache__/
 *.pyc
+.venv/
+input.mp4
+output/
+*.pt
+*.mp4
+*.avi
+*.mov
+*.png
+*.jpg
+*.jpeg
+*.gif
