@@ -24,11 +24,12 @@ def process_video(input_path, model_path):
     out = cv2.VideoWriter(out_path, fourcc, fps, (frame_w, frame_h))
 
     player_tracks = {}   # { "Player 1": [(x,y), ...], ... }
-    player_ids = {}      # Map YOLO IDs → Player names
+    player_ids = {}      # Map YOLO IDs → Player names (logical up to 22)
     passes_per_frame = []
     total_passes = 0
     prev_ball_owner = None
     frame_count = 0
+    MAX_PLAYERS = 22
 
     while True:
         ret, frame = cap.read()
@@ -47,10 +48,35 @@ def process_video(input_path, model_path):
                                           results[0].boxes.cls.cpu().numpy()):
                 x1, y1, x2, y2 = box
                 cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                bw, bh = int(x2 - x1), int(y2 - y1)
+                box_area = max(1, bw * bh)
+                frame_area = frame_w * frame_h
 
                 if int(cls) == 2:  # player
+                    # Filter improbable box sizes to reduce false positives
+                    if not (0.0005 * frame_area <= box_area <= 0.2 * frame_area):
+                        continue
+
+                    # Ensure logical player mapping does not exceed 22
                     if track_id not in player_ids:
-                        player_ids[track_id] = f"Player {len(player_ids)+1}"
+                        if len(set(player_ids.values())) < MAX_PLAYERS:
+                            player_ids[track_id] = f"Player {len(set(player_ids.values()))+1}"
+                        else:
+                            # Merge this new track to nearest existing player's latest position
+                            nearest_pid = None
+                            min_dist_merge = 1e12
+                            for p_id, pts in player_tracks.items():
+                                if pts:
+                                    px, py = pts[-1]
+                                    d = (px - cx) ** 2 + (py - cy) ** 2
+                                    if d < min_dist_merge:
+                                        min_dist_merge = d
+                                        nearest_pid = p_id
+                            if nearest_pid is None:
+                                # fallback: map to Player 1
+                                nearest_pid = "Player 1"
+                            player_ids[track_id] = nearest_pid
+
                     pid = player_ids[track_id]
 
                     if pid not in player_tracks:
@@ -119,9 +145,21 @@ def plot_player_heatmap_on_pitch(player_tracks, player="All Players",
         st.warning(f"No data available for {player}")
         return
 
-    xs, ys = zip(*coords)
-    xs = [x / frame_w * 120 for x in xs]              # normalize to pitch length (meters)
-    ys = [(1 - (y / frame_h)) * 80 for y in ys]       # invert Y to match pitch coords (meters)
+    # Smooth positions in pixel space to reduce jitter before normalization
+    def moving_average(series, k=5):
+        if len(series) < 2:
+            return series
+        kernel = np.ones(k) / k
+        return np.convolve(series, kernel, mode='same')
+
+    xs_px, ys_px = zip(*coords)
+    xs_px = list(xs_px)
+    ys_px = list(ys_px)
+    xs_px_s = moving_average(xs_px, k=5)
+    ys_px_s = moving_average(ys_px, k=5)
+
+    xs = [x / frame_w * 120 for x in xs_px_s]              # normalize to pitch length (meters)
+    ys = [(1 - (y / frame_h)) * 80 for y in ys_px_s]       # invert Y to match pitch coords (meters)
 
     fig, ax = plt.subplots(figsize=(13.5, 8))
     fig.set_facecolor("#22312b")
@@ -141,15 +179,19 @@ def plot_player_heatmap_on_pitch(player_tracks, player="All Players",
         top_speed_mps = 0.0
 
         # compute using consecutive points in pitch meters
+        # Reject unrealistically high speeds (e.g., > 10 m in a single frame at 30 fps ⇒ 300 m/s)
+        MAX_SPEED_MPS = 12.0  # ~43.2 km/h max plausible sprint speed
         for i in range(1, len(xs)):
             dx = xs[i] - xs[i - 1]
             dy = ys[i] - ys[i - 1]
             segment_m = np.sqrt(dx * dx + dy * dy)
-            total_distance_m += segment_m
             if fps and fps > 0:
                 speed_mps = segment_m * fps
+                if speed_mps > MAX_SPEED_MPS:
+                    continue  # skip spike
                 if speed_mps > top_speed_mps:
                     top_speed_mps = speed_mps
+            total_distance_m += segment_m
 
         stats_text = f"Distance: {total_distance_m:.1f} m\nTop speed: {top_speed_mps:.2f} m/s"
         ax.text(2, 76, stats_text, color="white", fontsize=12,
